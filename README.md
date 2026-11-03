@@ -23,3 +23,8 @@ Results highlight matching terms. Search uses Unicode-aware exact terms, not sem
 Индекс хранится в `pocket-index.sqlite` в рабочей папке; путь можно задать через `POCKET_INDEX_DB`. Повторное построение заменяет предыдущий индекс. Обрабатываются файлы `.md` и `.txt` до 1 МиБ; символические ссылки, другие файлы, неверная кодировка UTF-8 и недоступные файлы пропускаются. Индекс содержит текст заметок, поэтому храните его как личные данные. Исходные файлы не изменяются.
 
 Совпадения подсвечиваются в результатах. Поиск использует точные слова с поддержкой Unicode, без поиска по смыслу и склонениям русского языка. Результаты упорядочиваются SQLite FTS5; отображается до 50. Сервер предназначен для локального использования. Обложка — иллюстрация, не скриншот.
+
+### Search modes / Режимы поиска
+Choose All words, Exact phrase or Word prefix. The server builds a bounded literal FTS query (256 characters, 12 terms); arbitrary FTS operators are not accepted. Punctuation separates terms. Prefix matching is not Russian stemming or semantic search.
+Режимы: все слова, точная фраза, начало слова. Знаки пунктуации разделяют слова; до 256 символов и 12 слов. Это не поиск по смыслу или склонениям.
+Diagnostics: `cargo run --release -- --check` checks the database location and local port without indexing or reading notes. / Проверка запуска без чтения заметок: `--check`.
