@@ -131,7 +131,12 @@ pub fn active_index(connection: &Connection) -> rusqlite::Result<ActiveIndex> {
     connection.query_row(
         "SELECT generation,(SELECT count(*) FROM docs) FROM pocket_index_state WHERE singleton=1",
         [],
-        |row| Ok(ActiveIndex { generation: row.get(0)?, documents: row.get(1)? }),
+        |row| {
+            Ok(ActiveIndex {
+                generation: row.get(0)?,
+                documents: row.get(1)?,
+            })
+        },
     )
 }
 
@@ -142,7 +147,11 @@ pub fn set_progress(state: &Arc<Mutex<Progress>>, update: impl FnOnce(&mut Progr
 }
 
 /// Publish a complete snapshot only; unsupported extensions and symlinks are intentional skips.
-pub fn scan(root: &Path, path: &Path, progress: &Arc<Mutex<Progress>>) -> Result<ScanOutcome, ScanError> {
+pub fn scan(
+    root: &Path,
+    path: &Path,
+    progress: &Arc<Mutex<Progress>>,
+) -> Result<ScanOutcome, ScanError> {
     scan_with_reader(root, path, progress, read_document)
 }
 
@@ -165,7 +174,9 @@ fn scan_with_limits(
     budget: Duration,
 ) -> Result<ScanOutcome, ScanError> {
     let started = Instant::now();
-    let root = root.canonicalize().map_err(|_| ScanError::SourceUnavailable)?;
+    let root = root
+        .canonicalize()
+        .map_err(|_| ScanError::SourceUnavailable)?;
     if !root.is_dir() {
         return Err(ScanError::SourceUnavailable);
     }
@@ -176,7 +187,11 @@ fn scan_with_limits(
     transaction.execute("DELETE FROM docs", [])?;
     let mut failures = 0;
     let mut retained_reason = Reason::ReadErrors;
-    for (visited, entry) in WalkDir::new(&root).follow_links(false).into_iter().enumerate() {
+    for (visited, entry) in WalkDir::new(&root)
+        .follow_links(false)
+        .into_iter()
+        .enumerate()
+    {
         if visited >= max_entries || started.elapsed() > budget {
             failures += 1;
             retained_reason = Reason::ScanLimit;
@@ -198,7 +213,11 @@ fn scan_with_limits(
         if !entry.file_type().is_file() {
             continue;
         }
-        let extension = entry.path().extension().and_then(|x| x.to_str()).unwrap_or("");
+        let extension = entry
+            .path()
+            .extension()
+            .and_then(|x| x.to_str())
+            .unwrap_or("");
         if !extension.eq_ignore_ascii_case("md") && !extension.eq_ignore_ascii_case("txt") {
             set_progress(progress, |p| p.skipped += 1);
             continue;
@@ -212,10 +231,17 @@ fn scan_with_limits(
                 continue;
             }
         };
-        let relative = entry.path().strip_prefix(&root).map_err(|_| ScanError::SourceUnavailable)?;
+        let relative = entry
+            .path()
+            .strip_prefix(&root)
+            .map_err(|_| ScanError::SourceUnavailable)?;
         transaction.execute(
             "INSERT INTO docs(path,title,body) VALUES(?1,?2,?3)",
-            params![relative.to_string_lossy(), entry.file_name().to_string_lossy(), text],
+            params![
+                relative.to_string_lossy(),
+                entry.file_name().to_string_lossy(),
+                text
+            ],
         )?;
         set_progress(progress, |p| p.processed += 1);
     }
@@ -226,10 +252,16 @@ fn scan_with_limits(
     }
     if failures > 0 {
         transaction.rollback()?;
-        return Ok(ScanOutcome::Retained { active: previous, reason: retained_reason });
+        return Ok(ScanOutcome::Retained {
+            active: previous,
+            reason: retained_reason,
+        });
     }
     // Metadata and FTS rows commit together; a failed generation write rolls the snapshot back.
-    transaction.execute("UPDATE pocket_index_state SET generation=generation+1 WHERE singleton=1", [])?;
+    transaction.execute(
+        "UPDATE pocket_index_state SET generation=generation+1 WHERE singleton=1",
+        [],
+    )?;
     let active = active_index(&transaction)?;
     transaction.commit()?;
     Ok(ScanOutcome::Applied(active))
@@ -266,38 +298,58 @@ mod tests {
     use super::*;
     use std::{io, sync::mpsc, thread};
 
-    fn state() -> Arc<Mutex<Progress>> { Arc::new(Mutex::new(Progress::default())) }
+    fn state() -> Arc<Mutex<Progress>> {
+        Arc::new(Mutex::new(Progress::default()))
+    }
     fn matches(path: &Path, term: &str) -> rusqlite::Result<usize> {
-        Connection::open(path)?.query_row("SELECT count(*) FROM docs WHERE docs MATCH ?1", [term], |r| r.get(0))
+        Connection::open(path)?.query_row(
+            "SELECT count(*) FROM docs WHERE docs MATCH ?1",
+            [term],
+            |r| r.get(0),
+        )
     }
 
     #[test]
     fn invalid_utf8_keeps_snapshot_and_successful_retry_replaces_it() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
-        let root = temp.path().join("notes");std::fs::create_dir(&root)?;
+        let root = temp.path().join("notes");
+        std::fs::create_dir(&root)?;
         let db = temp.path().join("index.sqlite");
         std::fs::write(root.join("note.md"), "oldtoken")?;
         scan(&root, &db, &state())?;
         let before = active_index(&database(&db)?)?;
         std::fs::write(root.join("note.md"), "newtoken")?;
         std::fs::write(root.join("broken.txt"), [255, 254])?;
-        let progress = state();run_scan(&root, &db, &progress);
-        assert_eq!(progress.lock().map_err(|_| io::Error::other("lock"))?.phase, "retained");
+        let progress = state();
+        run_scan(&root, &db, &progress);
+        assert_eq!(
+            progress.lock().map_err(|_| io::Error::other("lock"))?.phase,
+            "retained"
+        );
         assert_eq!(active_index(&database(&db)?)?, before);
-        assert_eq!(matches(&db, "oldtoken")?, 1);assert_eq!(matches(&db, "newtoken")?, 0);
+        assert_eq!(matches(&db, "oldtoken")?, 1);
+        assert_eq!(matches(&db, "newtoken")?, 0);
         std::fs::remove_file(root.join("broken.txt"))?;
         scan(&root, &db, &state())?;
-        assert_eq!(matches(&db, "oldtoken")?, 0);assert_eq!(matches(&db, "newtoken")?, 1);
-        assert_eq!(active_index(&database(&db)?)?.generation, before.generation + 1);
+        assert_eq!(matches(&db, "oldtoken")?, 0);
+        assert_eq!(matches(&db, "newtoken")?, 1);
+        assert_eq!(
+            active_index(&database(&db)?)?.generation,
+            before.generation + 1
+        );
         Ok(())
     }
 
     #[test]
     fn actual_read_limit_does_not_trust_metadata_or_unbounded_growth() {
-        struct Growing { read: u64 }
+        struct Growing {
+            read: u64,
+        }
         impl Read for Growing {
             fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-                buffer.fill(b'x');self.read += buffer.len() as u64;Ok(buffer.len())
+                buffer.fill(b'x');
+                self.read += buffer.len() as u64;
+                Ok(buffer.len())
             }
         }
         let mut source = Growing { read: 0 };
@@ -308,34 +360,56 @@ mod tests {
 
     #[test]
     fn oversized_candidate_retains_previous_index() -> anyhow::Result<()> {
-        let temp = tempfile::tempdir()?;let root = temp.path().join("notes");std::fs::create_dir(&root)?;
-        let db = temp.path().join("index.sqlite");std::fs::write(root.join("one.txt"), "oldtoken")?;
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().join("notes");
+        std::fs::create_dir(&root)?;
+        let db = temp.path().join("index.sqlite");
+        std::fs::write(root.join("one.txt"), "oldtoken")?;
         scan(&root, &db, &state())?;
         std::fs::write(root.join("one.txt"), vec![b'x'; MAX_BYTES as usize + 1])?;
-        assert!(matches!(scan(&root, &db, &state())?, ScanOutcome::Retained { .. }));
-        assert_eq!(matches(&db, "oldtoken")?, 1);Ok(())
+        assert!(matches!(
+            scan(&root, &db, &state())?,
+            ScanOutcome::Retained { .. }
+        ));
+        assert_eq!(matches(&db, "oldtoken")?, 1);
+        Ok(())
     }
 
     #[test]
     fn sql_failure_rolls_back_fts_and_generation() -> anyhow::Result<()> {
-        let temp = tempfile::tempdir()?;let root = temp.path().join("notes");std::fs::create_dir(&root)?;
-        let db = temp.path().join("index.sqlite");std::fs::write(root.join("one.md"), "oldtoken")?;
-        scan(&root, &db, &state())?;let before = active_index(&database(&db)?)?;
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().join("notes");
+        std::fs::create_dir(&root)?;
+        let db = temp.path().join("index.sqlite");
+        std::fs::write(root.join("one.md"), "oldtoken")?;
+        scan(&root, &db, &state())?;
+        let before = active_index(&database(&db)?)?;
         database(&db)?.execute_batch("CREATE TRIGGER reject_snapshot BEFORE UPDATE ON pocket_index_state BEGIN SELECT RAISE(ABORT,'fixture'); END;")?;
         std::fs::write(root.join("one.md"), "newtoken")?;
-        assert!(matches!(scan(&root, &db, &state()), Err(ScanError::Storage(_))));
+        assert!(matches!(
+            scan(&root, &db, &state()),
+            Err(ScanError::Storage(_))
+        ));
         assert_eq!(active_index(&database(&db)?)?, before);
-        assert_eq!(matches(&db, "oldtoken")?, 1);assert_eq!(matches(&db, "newtoken")?, 0);Ok(())
+        assert_eq!(matches(&db, "oldtoken")?, 1);
+        assert_eq!(matches(&db, "newtoken")?, 0);
+        Ok(())
     }
 
     #[test]
     fn readers_see_previous_snapshot_while_rebuild_is_uncommitted() -> anyhow::Result<()> {
-        let temp = tempfile::tempdir()?;let root = temp.path().join("notes");std::fs::create_dir(&root)?;
-        let db = temp.path().join("index.sqlite");std::fs::write(root.join("one.md"), "oldtoken")?;
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().join("notes");
+        std::fs::create_dir(&root)?;
+        let db = temp.path().join("index.sqlite");
+        std::fs::write(root.join("one.md"), "oldtoken")?;
         scan(&root, &db, &state())?;
-        std::fs::write(root.join("one.md"), "newtoken")?;std::fs::write(root.join("two.txt"), "newtoken")?;
-        let (paused_tx, paused_rx) = mpsc::channel();let (resume_tx, resume_rx) = mpsc::channel();
-        let thread_root = root.clone();let thread_db = db.clone();
+        std::fs::write(root.join("one.md"), "newtoken")?;
+        std::fs::write(root.join("two.txt"), "newtoken")?;
+        let (paused_tx, paused_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let thread_root = root.clone();
+        let thread_db = db.clone();
         let worker = thread::spawn(move || {
             let mut calls = 0;
             scan_with_reader(&thread_root, &thread_db, &state(), |path| {
@@ -349,45 +423,101 @@ mod tests {
             })
         });
         paused_rx.recv_timeout(std::time::Duration::from_secs(5))?;
-        let old = matches(&db, "oldtoken");let new = matches(&db, "newtoken");
+        let old = matches(&db, "oldtoken");
+        let new = matches(&db, "newtoken");
         resume_tx.send(())?;
-        assert!(matches!(worker.join().map_err(|_| io::Error::other("worker"))??, ScanOutcome::Retained { .. }));
-        assert_eq!(old?, 1);assert_eq!(new?, 0);assert_eq!(matches(&db, "oldtoken")?, 1);Ok(())
+        assert!(matches!(
+            worker.join().map_err(|_| io::Error::other("worker"))??,
+            ScanOutcome::Retained { .. }
+        ));
+        assert_eq!(old?, 1);
+        assert_eq!(new?, 0);
+        assert_eq!(matches(&db, "oldtoken")?, 1);
+        Ok(())
     }
 
     #[test]
     fn entry_and_cooperative_time_limits_do_not_publish_partial_data() -> anyhow::Result<()> {
-        let temp = tempfile::tempdir()?;let root = temp.path().join("notes");std::fs::create_dir(&root)?;
-        let db = temp.path().join("index.sqlite");std::fs::write(root.join("one.md"), "oldtoken")?;
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().join("notes");
+        std::fs::create_dir(&root)?;
+        let db = temp.path().join("index.sqlite");
+        std::fs::write(root.join("one.md"), "oldtoken")?;
         scan(&root, &db, &state())?;
         std::fs::write(root.join("one.md"), "newtoken")?;
         let limited = scan_with_limits(&root, &db, &state(), read_document, 1, SCAN_BUDGET)?;
-        assert!(matches!(limited, ScanOutcome::Retained { reason: Reason::ScanLimit, .. }));
-        let slow = scan_with_limits(&root, &db, &state(), |path| {
-            thread::sleep(Duration::from_millis(30));read_document(path)
-        }, MAX_ENTRIES, Duration::from_millis(20))?;
-        assert!(matches!(slow, ScanOutcome::Retained { reason: Reason::ScanLimit, .. }));
-        assert_eq!(matches(&db, "oldtoken")?, 1);assert_eq!(matches(&db, "newtoken")?, 0);Ok(())
+        assert!(matches!(
+            limited,
+            ScanOutcome::Retained {
+                reason: Reason::ScanLimit,
+                ..
+            }
+        ));
+        let slow = scan_with_limits(
+            &root,
+            &db,
+            &state(),
+            |path| {
+                thread::sleep(Duration::from_millis(30));
+                read_document(path)
+            },
+            MAX_ENTRIES,
+            Duration::from_millis(20),
+        )?;
+        assert!(matches!(
+            slow,
+            ScanOutcome::Retained {
+                reason: Reason::ScanLimit,
+                ..
+            }
+        ));
+        assert_eq!(matches(&db, "oldtoken")?, 1);
+        assert_eq!(matches(&db, "newtoken")?, 0);
+        Ok(())
     }
 
     #[test]
     fn legacy_index_survives_metadata_upgrade_and_missing_root() -> anyhow::Result<()> {
-        let temp = tempfile::tempdir()?;let db = temp.path().join("legacy.sqlite");
+        let temp = tempfile::tempdir()?;
+        let db = temp.path().join("legacy.sqlite");
         let connection = Connection::open(&db)?;
         connection.execute_batch("CREATE VIRTUAL TABLE docs USING fts5(path UNINDEXED,title,body,tokenize='unicode61'); INSERT INTO docs VALUES('a.md','a.md','oldtoken');")?;
         drop(connection);
-        let active = active_index(&database(&db)?)?;assert_eq!(active.documents, 1);assert_eq!(active.generation, 0);
-        assert!(matches!(scan(&temp.path().join("missing"), &db, &state()), Err(ScanError::SourceUnavailable)));
-        assert_eq!(matches(&db, "oldtoken")?, 1);Ok(())
+        let active = active_index(&database(&db)?)?;
+        assert_eq!(active.documents, 1);
+        assert_eq!(active.generation, 0);
+        assert!(matches!(
+            scan(&temp.path().join("missing"), &db, &state()),
+            Err(ScanError::SourceUnavailable)
+        ));
+        assert_eq!(matches(&db, "oldtoken")?, 1);
+        Ok(())
     }
 
     #[test]
-    fn complete_empty_folder_is_a_valid_snapshot_and_first_failure_is_empty() -> anyhow::Result<()> {
-        let temp = tempfile::tempdir()?;let root = temp.path().join("notes");std::fs::create_dir(&root)?;
-        let db = temp.path().join("index.sqlite");std::fs::write(root.join("bad.md"), [255])?;
-        assert!(matches!(scan(&root, &db, &state())?, ScanOutcome::Retained { active: ActiveIndex { documents: 0, .. }, .. }));
+    fn complete_empty_folder_is_a_valid_snapshot_and_first_failure_is_empty() -> anyhow::Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().join("notes");
+        std::fs::create_dir(&root)?;
+        let db = temp.path().join("index.sqlite");
+        std::fs::write(root.join("bad.md"), [255])?;
+        assert!(matches!(
+            scan(&root, &db, &state())?,
+            ScanOutcome::Retained {
+                active: ActiveIndex { documents: 0, .. },
+                ..
+            }
+        ));
         std::fs::remove_file(root.join("bad.md"))?;
         let result = scan(&root, &db, &state())?;
-        assert_eq!(result, ScanOutcome::Applied(ActiveIndex { documents: 0, generation: 1 }));Ok(())
+        assert_eq!(
+            result,
+            ScanOutcome::Applied(ActiveIndex {
+                documents: 0,
+                generation: 1
+            })
+        );
+        Ok(())
     }
 }

@@ -18,7 +18,8 @@ def request(path, data=None):
     body = json.dumps(data).encode() if data is not None else None
     req = urllib.request.Request('http://127.0.0.1:3002' + path, data=body, headers=headers)
     with urllib.request.urlopen(req, timeout=5) as response:
-        return json.loads(response.read()), response.headers
+        payload = response.read()
+        return (json.loads(payload) if payload else None), response.headers
 
 
 def start(root, db):
