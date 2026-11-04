@@ -3,3 +3,5 @@
 mark{background:color-mix(in srgb,var(--accent) 23%,var(--panel));color:var(--ink);border-radius:3px;padding:0 2px}
 
 #query-modes{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}#query-modes button{padding:8px 12px;border:1px solid var(--line);border-radius:6px}#query-modes button[aria-pressed=true]{outline:2px solid currentColor}#query-help{font-size:13px;margin:10px 0}
+
+#active-index{font-weight:600;font-size:.86rem}#scan-help,#result-index{font-size:.85rem;line-height:1.6;color:var(--muted)}#result-index:not(:empty){border-left:2px solid var(--accent);padding-left:.8rem}
